@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 
-import os, re, sys, time
-from github import Github, GithubException, InputGitAuthor, enable_console_debug_logging
+import datetime, os, re, sys, time
+
+import github
 import tomlkit
 
 
@@ -13,19 +14,26 @@ DEFAULT_AUTHOR_EMAIL = "sebastian@mozilla.com"
 MASTER_BRANCH_NAME = "master"
 
 
-# From util.py
-
-import datetime
-
 def ts():
     return str(datetime.datetime.now())
 
 
 def get_contents(repo, path, ref):
+    """Wrapper around get_contents that returns None instead of throwing on a 404"""
     try:
         return repo.get_contents(path, ref=ref)
-    except GithubException as e:
-        pass # TODO Only return None or 404
+    except github.UnknownObjectException as e:
+        pass
+
+
+def android_locale(locale):
+    """Convert the given Pontoon locale to the code Android uses"""
+    ANDROID_COMPATIBILITY_MAPPINGS = {"he": "iw", "yi": "ji", "id": "in"}
+    if locale in ANDROID_COMPATIBILITY_MAPPINGS:
+        return ANDROID_COMPATIBILITY_MAPPINGS[locale]
+    if matches := re.match(r"([a-z]+)-([A-Z]+)", locale):
+        return f"{matches.group(1)}-r{matches.group(2)}"
+    return locale
 
 
 def sync_fenix_strings(repo, fenix_major_version, author, debug, dry_run):
@@ -63,14 +71,6 @@ def sync_strings(repo, release_branch, product_name, major_version, author, debu
     master_toml_contents = repo.get_contents("l10n-release.toml", ref=MASTER_BRANCH_NAME)
     master_toml = tomlkit.loads(master_toml_contents.decoded_content.decode("utf-8"))
 
-    def android_locale(locale):
-        ANDROID_COMPATIBILITY_MAPPINGS = {"he": "iw", "yi": "ji", "id": "in"}
-        if locale in ANDROID_COMPATIBILITY_MAPPINGS:
-            return ANDROID_COMPATIBILITY_MAPPINGS[locale]
-        if matches := re.match(r"([a-z]+)-([A-Z]+)", locale):
-            return f"{matches.group(1)}-r{matches.group(2)}"
-        return locale
-
     master_paths = ["l10n.toml"]
     for locale in master_toml["locales"]:
         master_paths.append(f"app/src/main/res/values-{android_locale(locale)}/strings.xml")
@@ -106,13 +106,15 @@ def sync_strings(repo, release_branch, product_name, major_version, author, debu
 
     for path in changed_files.keys():
         src = master_files[path]
-        print(src)
         dst = changed_files[path]
-        print(dst)
-        if src and dst:
-            repo.update_file(src.path, f"Strings update - {path}", src.decoded_content, dst.sha, branch=pr_branch_name, author=author)
+        if dst:
+            print(f"{ts()} Updating {path}")
+            repo.update_file(src.path, f"Strings update - {path}", src.decoded_content,
+                             dst.sha, branch=pr_branch_name, author=author)
         else:
-            print(f"{ts()} TODO We don't handle new files {path}")
+            print(f"{ts()} Creating {path}")
+            repo.create_file(src.path, f"Strings update - {path}", src.decoded_content,
+                             branch=pr_branch_name)
 
     #
     # Create the pull request
@@ -124,23 +126,24 @@ def sync_strings(repo, release_branch, product_name, major_version, author, debu
 
     print(f"{ts()} Creating pull request")
     pr = repo.create_pull(title=f"String sync for {product_name} v{major_version}",
-                             body=f"This (automated) patch syncs strings from {product_name} `{MASTER_BRANCH_NAME}` to `{release_branch.name}`.\n\nThe following files needed an update:\n\n{list_of_changes}",
-                             head=pr_branch_name, base=release_branch.name)
+                          body=f"This (automated) patch syncs strings from {product_name} `{MASTER_BRANCH_NAME}` to `{release_branch.name}`.\n\nThe following files needed an update:\n\n{list_of_changes}",
+                          head=pr_branch_name, base=release_branch.name)
     print(f"{ts()} Pull request at {pr.html_url}")
+
 
 if __name__ == "__main__":
 
     debug = os.getenv("DEBUG") is not None
     if debug:
-        enable_console_debug_logging()
+        github.enable_console_debug_logging()
 
     github_access_token = os.getenv("GITHUB_TOKEN")
     if not github_access_token:
         print("No GITHUB_TOKEN set. Exiting.")
         sys.exit(1)
 
-    github = Github(github_access_token)
-    if github.get_user() is None:
+    gh = github.Github(github_access_token)
+    if gh.get_user() is None:
         print("Could not get authenticated user. Exiting.")
         sys.exit(1)
 
@@ -148,11 +151,11 @@ if __name__ == "__main__":
 
     organization = os.getenv("GITHUB_REPOSITORY_OWNER") or DEFAULT_ORGANIZATION
 
-    ac_repo = github.get_repo(f"{organization}/android-components")
-    fenix_repo = github.get_repo(f"{organization}/fenix")
+    ac_repo = gh.get_repo(f"{organization}/android-components")
+    fenix_repo = gh.get_repo(f"{organization}/fenix")
 
     author_name = os.getenv("AUTHOR_NAME") or DEFAULT_AUTHOR_NAME
     author_email = os.getenv("AUTHOR_EMAIL") or DEFAULT_AUTHOR_EMAIL
-    author = InputGitAuthor(author_name, author_email)
+    author = github.InputGitAuthor(author_name, author_email)
 
     sync_fenix_strings(fenix_repo, 86, author, debug, dry_run)
