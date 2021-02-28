@@ -7,7 +7,7 @@ import github
 import tomlkit
 
 
-DEFAULT_ORGANIZATION = "st3fan"
+DEFAULT_REPOSITORY_OWNER = "st3fan"
 DEFAULT_AUTHOR_NAME = "MickeyMoz"
 DEFAULT_AUTHOR_EMAIL = "sebastian@mozilla.com"
 
@@ -49,6 +49,12 @@ def sync_fenix_strings(repo, fenix_major_version, author, debug, dry_run):
     #
 
     release_branch = repo.get_branch(release_branch_name)
+
+    version_contents = repo.get_contents("version.txt", ref=release_branch_name)
+    version = version_contents.decoded_content.decode("utf-8")
+    if "-beta." not in version:
+        print(f"{ts()} Not syncing strings for <{release_branch_name}> since it is not beta")
+        return
 
     sync_strings(repo, release_branch, "Fenix", fenix_major_version, author, debug, dry_run)
 
@@ -149,7 +155,7 @@ if __name__ == "__main__":
 
     dry_run = os.getenv("DRY_RUN") == "True"
 
-    organization = os.getenv("GITHUB_REPOSITORY_OWNER") or DEFAULT_ORGANIZATION
+    organization = os.getenv("GITHUB_REPOSITORY_OWNER") or DEFAULT_REPOSITORY_OWNER
 
     ac_repo = gh.get_repo(f"{organization}/android-components")
     fenix_repo = gh.get_repo(f"{organization}/fenix")
@@ -158,4 +164,5 @@ if __name__ == "__main__":
     author_email = os.getenv("AUTHOR_EMAIL") or DEFAULT_AUTHOR_EMAIL
     author = github.InputGitAuthor(author_name, author_email)
 
-    sync_fenix_strings(fenix_repo, 86, author, debug, dry_run)
+    if sys.argv[1] == "fenix":
+        sync_fenix_strings(fenix_repo, 87, author, debug, dry_run)
